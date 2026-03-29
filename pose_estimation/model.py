@@ -1,22 +1,23 @@
 """ONNX / CoreML pose-estimation model wrapper.
 
-Supports YOLOv8-pose ONNX models that accept 640×640 RGB images and output
-detections with 17 COCO body keypoints.
+Supports YOLO26 pose models that accept 640×640 RGB images and export with
+an integrated end-to-end head.
 
-Output tensor layout (YOLOv8-pose ONNX export)
------------------------------------------------
-Shape: [1, 56, 8400]
-  - [:, 0:4, :] – bounding-box (cx, cy, w, h) in input-pixel space
-  - [:, 4,   :] – detection confidence score (0–1)
-  - [:, 5:56,:] – 17 keypoints, each encoded as (x, y, visibility) in
-                  input-pixel space  →  51 values total
+Output tensor layout (YOLO26 end2end export)
+---------------------------------------------
+Shape: [1, 300, 57]
+    - [:, :, 0:4]   – bounding-box (x1, y1, x2, y2) in input-pixel space
+    - [:, :, 4]     – detection confidence score (0–1)
+    - [:, :, 5]     – class ID
+    - [:, :, 6:57]  – 17 keypoints, each encoded as (x, y, visibility)
+                                        in input-pixel space  →  51 values total
 """
 
 from __future__ import annotations
 
 import platform
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import List, Tuple
 
 import cv2
 import numpy as np
@@ -24,7 +25,7 @@ import numpy as np
 # --------------------------------------------------------------------------- #
 # Type alias
 # --------------------------------------------------------------------------- #
-Detection = dict  # keys: box, score, keypoints
+Detection = dict  # keys: box, score, class_id, keypoints
 
 INPUT_SIZE = 640  # model input width == height
 
@@ -39,7 +40,8 @@ class PoseEstimationModel:
     conf_threshold:
         Minimum detection confidence to keep (default 0.25).
     iou_threshold:
-        IOU threshold used for non-maximum suppression (default 0.45).
+        Kept for API compatibility. Not used for YOLO26 end2end outputs,
+        because NMS is already performed in-model.
     """
 
     def __init__(
@@ -191,19 +193,38 @@ class PoseEstimationModel:
     def _run_inference(self, blob: np.ndarray) -> np.ndarray:
         if self._backend == "onnx":
             outputs = self._session.run(None, {self._input_name: blob})
-            return outputs[0]  # (1, 56, 8400)
+            return outputs[0]  # expected: (1, 300, 57)
         elif self._backend == "coreml":
             return self._run_coreml(blob)
         raise RuntimeError(f"Unknown backend '{self._backend}'.")
 
     def _run_coreml(self, blob: np.ndarray) -> np.ndarray:
-        import coremltools as ct  # noqa: F401
+        from PIL import Image
 
-        # CoreML expects a dict of input tensors; the input name may vary.
         input_name = list(self._coreml_model.get_spec().description.input)[0].name
-        result = self._coreml_model.predict({input_name: blob})
-        # Return the first (and typically only) output array
-        return list(result.values())[0]
+
+        # CoreML Image inputs expect a PIL Image (uint8 RGB HWC).
+        # blob is (1, 3, H, W) float32 [0, 1] RGB — convert back to uint8.
+        img_hwc = (blob[0].transpose(1, 2, 0) * 255).clip(0, 255).astype(np.uint8)
+        pil_image = Image.fromarray(img_hwc)
+
+        result = self._coreml_model.predict({input_name: pil_image})
+        output = list(result.values())[0]
+
+        # Normalize CoreML outputs to (1, N, 57) for end2end decoding.
+        if output.ndim == 2:
+            output = output[np.newaxis, ...]
+        if output.ndim != 3:
+            raise ValueError(f"Unexpected CoreML output rank: {output.ndim}")
+        if output.shape[-1] == 57:
+            return output
+        if output.shape[1] == 57:
+            return output.transpose(0, 2, 1)
+
+        raise ValueError(
+            f"Unexpected CoreML output shape {output.shape}; expected (1, N, 57) "
+            "or (1, 57, N)."
+        )
 
     # ---------------------------------------------------------------------- #
     # Post-processing
@@ -220,11 +241,22 @@ class PoseEstimationModel:
     ) -> List[Detection]:
         """Decode raw model output into a list of detections.
 
-        *raw* is expected to have shape (1, 56, N) where N is the number of
-        anchor positions (typically 8400 for a 640-pixel input).
+        *raw* is expected to have shape (1, N, 57), where each detection row is:
+        [x1, y1, x2, y2, score, class_id, 17*3 keypoints].
         """
-        # Squeeze batch dimension → (56, N), then transpose → (N, 56)
-        preds = raw[0].T  # (N, 56)
+        if raw.ndim != 3:
+            raise ValueError(f"Unexpected model output rank: {raw.ndim}")
+
+        if raw.shape[-1] == 57:
+            preds = raw[0]  # (N, 57)
+        elif raw.shape[1] == 57:
+            # Compatibility with transposed exports.
+            preds = raw[0].T
+        else:
+            raise ValueError(
+                f"Unexpected model output shape {raw.shape}; expected (1, N, 57) "
+                "or (1, 57, N)."
+            )
 
         scores = preds[:, 4]
         mask = scores >= self.conf_threshold
@@ -234,23 +266,8 @@ class PoseEstimationModel:
         preds = preds[mask]
         scores = scores[mask]
 
-        # Bounding boxes: cx, cy, w, h  (in letterboxed-input pixel space)
-        cx, cy, bw, bh = preds[:, 0], preds[:, 1], preds[:, 2], preds[:, 3]
-        x1 = cx - bw / 2
-        y1 = cy - bh / 2
-        x2 = cx + bw / 2
-        y2 = cy + bh / 2
-
-        boxes_lb = np.stack([x1, y1, x2, y2], axis=1)  # letterboxed coords
-
-        # NMS
-        keep = self._nms(boxes_lb, scores)
-        if len(keep) == 0:
-            return []
-
-        preds = preds[keep]
-        scores = scores[keep]
-        boxes_lb = boxes_lb[keep]
+        # End-to-end head already returns final xyxy detections.
+        boxes_lb = preds[:, 0:4].copy()
 
         # Map back from letterboxed space to original image space
         half_pad_w = pad_w / 2
@@ -272,7 +289,7 @@ class PoseEstimationModel:
             by2 = float(np.clip(by2, 0, orig_h))
 
             # Keypoints: 17 × 3 (x, y, visibility) in letterboxed space
-            kps_raw = preds[i, 5:].reshape(17, 3).copy()
+            kps_raw = preds[i, 6:57].reshape(17, 3).copy()
             kps_raw[:, 0] = (kps_raw[:, 0] - half_pad_w) / ratio
             kps_raw[:, 1] = (kps_raw[:, 1] - half_pad_h) / ratio
             kps_raw[:, 0] = np.clip(kps_raw[:, 0], 0, orig_w)
@@ -282,6 +299,7 @@ class PoseEstimationModel:
                 {
                     "box": [bx1, by1, bx2, by2],
                     "score": float(scores[i]),
+                    "class_id": int(preds[i, 5]),
                     "keypoints": kps_raw,  # (17, 3) float32
                 }
             )
@@ -289,33 +307,8 @@ class PoseEstimationModel:
         return detections
 
     # ---------------------------------------------------------------------- #
-    # Non-maximum suppression (pure NumPy)
+    # Note
     # ---------------------------------------------------------------------- #
 
-    def _nms(self, boxes: np.ndarray, scores: np.ndarray) -> np.ndarray:
-        """Return indices of boxes to keep after NMS."""
-        x1, y1, x2, y2 = boxes[:, 0], boxes[:, 1], boxes[:, 2], boxes[:, 3]
-        areas = (x2 - x1) * (y2 - y1)
-        order = scores.argsort()[::-1]
-
-        keep = []
-        while order.size > 0:
-            i = order[0]
-            keep.append(i)
-            if order.size == 1:
-                break
-
-            ix1 = np.maximum(x1[i], x1[order[1:]])
-            iy1 = np.maximum(y1[i], y1[order[1:]])
-            ix2 = np.minimum(x2[i], x2[order[1:]])
-            iy2 = np.minimum(y2[i], y2[order[1:]])
-
-            inter_w = np.maximum(0.0, ix2 - ix1)
-            inter_h = np.maximum(0.0, iy2 - iy1)
-            inter = inter_w * inter_h
-
-            iou = inter / (areas[i] + areas[order[1:]] - inter + 1e-6)
-            inds = np.where(iou <= self.iou_threshold)[0]
-            order = order[inds + 1]
-
-        return np.array(keep, dtype=np.int64)
+    # The YOLO26 end2end export performs NMS in-model, so no external NMS
+    # is needed in this wrapper.

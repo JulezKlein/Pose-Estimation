@@ -1,7 +1,7 @@
 # Pose-Estimation
 
 Human pose estimation with 17 COCO keypoints using an ONNX or CoreML model
-(640 × 640 input, YOLOv8-pose compatible).  Three ready-to-run applications
+(640 × 640 input, YOLO26 end-to-end output compatible).  Three ready-to-run applications
 are provided:
 
 | Script | Description |
@@ -25,12 +25,12 @@ pip install -r requirements.txt
 
 ### 2 – Obtain a model
 
-Export a YOLOv8-pose model to ONNX:
+Export a YOLO pose model to ONNX with end-to-end decoding:
 
 ```bash
 pip install ultralytics
-yolo export model=yolov8n-pose.pt format=onnx imgsz=640
-# produces yolov8n-pose.onnx
+yolo export model=yolo26s-pose.pt format=onnx imgsz=640 end2end=True
+# produces yolo26s-pose.onnx
 ```
 
 Or download a pre-exported file from the
@@ -43,7 +43,7 @@ Or download a pre-exported file from the
 ### Webcam stream
 
 ```bash
-python webcam_stream.py --model yolov8n-pose.onnx
+python webcam_stream.py --model yolo26s-pose.onnx
 ```
 
 | Key | Action |
@@ -56,7 +56,8 @@ Optional arguments:
 ```
 --camera 1          # camera index or RTSP/HTTP URL
 --conf 0.35         # detection confidence threshold  (default 0.25)
---iou  0.5          # NMS IOU threshold               (default 0.45)
+--iou  0.5          # compatibility flag (ignored in end2end mode)
+--save-video out.mp4 # save annotated webcam stream to a video file
 --width / --height  # request capture resolution
 --no-boxes          # hide bounding boxes
 --no-skeleton       # hide skeleton limbs
@@ -67,7 +68,7 @@ Optional arguments:
 ### Video inference
 
 ```bash
-python run_video.py --model yolov8n-pose.onnx --input clip.mp4
+python run_video.py --model yolo26s-pose.onnx --input clip.mp4
 ```
 
 The annotated video is saved as `clip_pose.mp4` by default.
@@ -84,24 +85,39 @@ The annotated video is saved as `clip_pose.mp4` by default.
 ### Image inference
 
 ```bash
-python run_image.py --model yolov8n-pose.onnx --input photo.jpg
+python run_image.py --model yolo26s-pose.onnx --input photo.jpg
 ```
 
 The annotated image is saved as `photo_pose.jpg` by default.
 
 ```bash
 # Multiple images
-python run_image.py --model yolov8n-pose.onnx --input *.jpg --show
+python run_image.py --model yolo26s-pose.onnx --input *.jpg --show
 
 # Custom output path (single image only)
-python run_image.py --model yolov8n-pose.onnx --input photo.jpg --output out.jpg
+python run_image.py --model yolo26s-pose.onnx --input photo.jpg --output out.jpg
 ```
 
 ```
 --show             # display result in a window (any key = next, q/Esc = quit)
 --no-save          # do not write output files
---conf / --iou     # thresholds
+--conf / --iou     # confidence + compatibility flag (iou ignored in end2end)
 --no-boxes / --no-skeleton
+```
+
+---
+
+## End-to-end output format
+
+This project assumes the default YOLO26 end-to-end output tensor:
+
+```
+shape: (batch_size, 300, 57)
+
+0:4    -> bounding box in xyxy format
+4      -> confidence score
+5      -> class id
+6:57   -> 17 keypoints * 3 values [x, y, visibility]
 ```
 
 ---

@@ -47,7 +47,10 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--iou", default=0.45, type=float,
-        help="IOU threshold for non-maximum suppression.",
+        help=(
+            "Retained for compatibility; ignored for YOLO26 end-to-end "
+            "models (NMS is in-model)."
+        ),
     )
     parser.add_argument(
         "--no-boxes", action="store_true",

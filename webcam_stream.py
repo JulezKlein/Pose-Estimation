@@ -10,6 +10,7 @@ Usage
     python webcam_stream.py --model path/to/model.onnx
     python webcam_stream.py --model path/to/model.onnx --camera 1
     python webcam_stream.py --model path/to/model.onnx --conf 0.35 --iou 0.5
+    python webcam_stream.py --model path/to/model.onnx --save-video out.mp4
 
 Controls
 --------
@@ -48,7 +49,10 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--iou", default=0.45, type=float,
-        help="IOU threshold for non-maximum suppression.",
+        help=(
+            "Retained for compatibility; ignored for YOLO26 end-to-end "
+            "models (NMS is in-model)."
+        ),
     )
     parser.add_argument(
         "--width", default=0, type=int,
@@ -65,6 +69,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--no-skeleton", action="store_true",
         help="Do not draw skeleton limbs.",
+    )
+    parser.add_argument(
+        "--save-video", default=None, type=Path,
+        help="Optional output path to save the annotated webcam stream (e.g. out.mp4).",
     )
     return parser.parse_args()
 
@@ -112,6 +120,9 @@ def main() -> None:
     frame_count = 0
     fps_start = time.perf_counter()
     fps = 0.0
+    display = None
+    writer = None
+    video_out_path: Path | None = None
 
     print("[INFO] Stream started. Press 'q' or Esc to quit, 's' to save, 'p' to pause.")
 
@@ -149,9 +160,45 @@ def main() -> None:
             _draw_hud(vis, fps, len(detections))
             display = vis
 
+            if args.save_video is not None:
+                if writer is None:
+                    video_out_path = args.save_video
+                    video_out_path.parent.mkdir(parents=True, exist_ok=True)
+
+                    out_h, out_w = display.shape[:2]
+                    out_fps = cap.get(cv2.CAP_PROP_FPS)
+                    if out_fps <= 0:
+                        out_fps = 30.0
+
+                    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+                    writer = cv2.VideoWriter(
+                        str(video_out_path), fourcc, out_fps, (out_w, out_h)
+                    )
+                    if not writer.isOpened():
+                        print(
+                            f"[ERROR] Cannot create output video: {video_out_path}",
+                            file=sys.stderr,
+                        )
+                        cap.release()
+                        cv2.destroyAllWindows()
+                        sys.exit(1)
+                    print(f"[INFO] Recording stream to: {video_out_path}")
+
+                writer.write(display)
+
         # ---------------------------------------------------------- #
         # Display
         # ---------------------------------------------------------- #
+        if display is None:
+            key = cv2.waitKey(1) & 0xFF
+            if key in (ord("q"), 27):
+                break
+            elif key == ord("p"):
+                paused = not paused
+                status = "paused" if paused else "resumed"
+                print(f"[INFO] Stream {status}.")
+            continue
+
         cv2.imshow(win_name, display)
         key = cv2.waitKey(1) & 0xFF
 
@@ -168,6 +215,9 @@ def main() -> None:
             print(f"[INFO] Stream {status}.")
 
     cap.release()
+    if writer is not None:
+        writer.release()
+        print(f"[INFO] Saved video to: {video_out_path}")
     cv2.destroyAllWindows()
     print("[INFO] Done.")
 
