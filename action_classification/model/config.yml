@@ -1,0 +1,28 @@
+model:
+  input_size: 51          # 17 keypoints * 3 (x, y, confidence)
+  hidden_size: 128
+  num_layers: 2
+  output_size: 1          # 1 = binary (BCEWithLogitsLoss); >1 = multi-class
+  dropout: 0.1
+
+training:
+  epochs: 50
+  batch_size: 32
+  learning_rate: 1.0e-3
+  weight_decay: 1.0e-4
+  seq_len: 30             # number of frames per sample
+  val_split: 0.2          # fraction of data used for validation
+  seed: 42
+  device: mps             # cpu | cuda | mps
+
+data:
+  captures_dir: captures  # root folder produced by webcam_stream.py --record-dir
+  labels_file: labels.json
+
+checkpoints:
+  dir: checkpoints
+  save_best: true         # keep only the best val-loss checkpoint
+
+export:
+  onnx: null              # path to write .onnx, e.g. exports/model.onnx
+  coreml: null            # path to write .mlpackage, e.g. exports/model.mlpackage

@@ -6,3 +6,11 @@ pillow
 
 # CoreML inference (macOS only – optional)
 coremltools>=7.0
+
+# Labeling tool
+streamlit>=1.35.0
+watchdog
+pandas>=2.0.0
+
+# Action classification (optional)
+torch>=2.0.0

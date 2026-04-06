@@ -7,8 +7,8 @@ terminal.
 
 Usage
 -----
-    python run_video.py --model path/to/model.onnx --input video.mp4
-    python run_video.py --model path/to/model.onnx --input video.mp4 \\
+    python pose_est_run_video.py --model path/to/model.onnx --input video.mp4
+    python pose_est_run_video.py --model path/to/model.onnx --input video.mp4 \\
                         --output annotated.mp4 --conf 0.35
 """
 

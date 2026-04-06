@@ -6,9 +6,9 @@ annotated result, and optionally displays it.
 
 Usage
 -----
-    python run_image.py --model path/to/model.onnx --input photo.jpg
-    python run_image.py --model path/to/model.onnx --input *.jpg --show
-    python run_image.py --model path/to/model.onnx --input photo.jpg \\
+    python pose_est_run_image.py --model path/to/model.onnx --input photo.jpg
+    python pose_est_run_image.py --model path/to/model.onnx --input *.jpg --show
+    python pose_est_run_image.py --model path/to/model.onnx --input photo.jpg \\
                         --output result.jpg --conf 0.3
 """
 
