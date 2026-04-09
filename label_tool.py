@@ -12,7 +12,7 @@ Usage
 The captures directory is expected to contain sub-folders produced by
 ``webcam_stream.py --record-dir <captures-dir>``.  Each sub-folder holds:
 
-    raw.mp4          – unannotated video
+    raw.mp4 / *.MOV  – unannotated video
     keypoints.jsonl  – per-frame pose detections (one JSON object per line)
     meta.json        – fps + total_frames metadata
     labels.json      – (created/updated by this tool)
@@ -31,6 +31,16 @@ import pandas as pd
 import streamlit as st
 
 from pose_estimation import draw_poses
+
+VIDEO_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".m4v"}
+
+
+def _find_video(session_dir: Path) -> Optional[Path]:
+    """Return the first video file found in *session_dir*, or None."""
+    for p in sorted(session_dir.iterdir()):
+        if p.is_file() and p.suffix.lower() in VIDEO_EXTENSIONS:
+            return p
+    return None
 
 # --------------------------------------------------------------------------- #
 # Page configuration
@@ -163,7 +173,7 @@ if not CAPTURES_DIR.exists():
     st.stop()
 
 sessions = sorted(
-    [d for d in CAPTURES_DIR.iterdir() if d.is_dir() and (d / "raw.mp4").exists()],
+    [d for d in CAPTURES_DIR.iterdir() if d.is_dir() and _find_video(d) is not None],
     reverse=True,
 )
 if not sessions:
@@ -181,7 +191,11 @@ session_names = [s.name for s in sessions]
 selected_name = st.sidebar.selectbox("Session", session_names)
 
 session_dir = CAPTURES_DIR / selected_name
-video_path = str(session_dir / "raw.mp4")
+_video_file = _find_video(session_dir)
+if _video_file is None:
+    st.error(f"No video file found in session: `{session_dir}`")
+    st.stop()
+video_path = str(_video_file)
 kp_path = session_dir / "keypoints.jsonl"
 labels_path = session_dir / "labels.json"
 

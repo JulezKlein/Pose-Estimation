@@ -7,14 +7,16 @@ terminal.
 
 Usage
 -----
-    python pose_est_run_video.py --model path/to/model.onnx --input video.mp4
-    python pose_est_run_video.py --model path/to/model.onnx --input video.mp4 \\
-                        --output annotated.mp4 --conf 0.35
+    python3 pose_est_run_video.py --input video.mp4
+    python3 pose_est_run_video.py --input video.mp4 --show
+    python3 pose_est_run_video.py --input video.mp4 --record-dir captures
 """
 
 import argparse
+import json
 import sys
 import time
+from datetime import datetime
 from pathlib import Path
 
 import cv2
@@ -28,19 +30,12 @@ def parse_args() -> argparse.Namespace:
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument(
-        "--model", required=True, type=Path,
+        "--model", default="pose_estimation/model/best.mlpackage", type=Path,
         help="Path to the ONNX (.onnx) or CoreML (.mlpackage / .mlmodel) model.",
     )
     parser.add_argument(
         "--input", required=True, type=Path,
         help="Path to the input video file.",
-    )
-    parser.add_argument(
-        "--output", default=None, type=Path,
-        help=(
-            "Path for the annotated output video. "
-            "Defaults to <input_stem>_pose.<input_suffix>."
-        ),
     )
     parser.add_argument(
         "--conf", default=0.25, type=float,
@@ -54,16 +49,16 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
-        "--no-boxes", action="store_true",
-        help="Do not draw bounding boxes.",
-    )
-    parser.add_argument(
-        "--no-skeleton", action="store_true",
-        help="Do not draw skeleton limbs.",
-    )
-    parser.add_argument(
         "--show", action="store_true",
         help="Display each annotated frame in a window while processing.",
+    )
+    parser.add_argument(
+        "--record-dir", default="captures", type=Path,
+        help=(
+            "Root directory for training-data capture. "
+            "Creates a timestamped sub-folder containing "
+            "'keypoints.jsonl' (one JSON object per frame) and 'meta.json'."
+        ),
     )
     return parser.parse_args()
 
@@ -77,13 +72,6 @@ def main() -> None:
     if not args.input.exists():
         print(f"[ERROR] Input file not found: {args.input}", file=sys.stderr)
         sys.exit(1)
-
-    # ------------------------------------------------------------------ #
-    # Resolve output path
-    # ------------------------------------------------------------------ #
-    if args.output is None:
-        suffix = args.input.suffix or ".mp4"
-        args.output = args.input.parent / f"{args.input.stem}_pose{suffix}"
 
     # ------------------------------------------------------------------ #
     # Load model
@@ -109,19 +97,32 @@ def main() -> None:
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
+    # ------------------------------------------------------------------ #
+    # Set up session dir (always) and resolve output path
+    # ------------------------------------------------------------------ #
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    session_dir = args.record_dir / ts
+    session_dir.mkdir(parents=True, exist_ok=True)
+
+    suffix = args.input.suffix or ".mp4"
+    output_path = session_dir / f"{args.input.stem}_pose{suffix}"
+
+    print(f"[INFO] Session → {session_dir}")
     print(
         f"[INFO] Video: {width}×{height}, {fps:.2f} fps, "
-        f"~{total_frames} frames  →  {args.output}"
+        f"~{total_frames} frames  →  {output_path}"
     )
 
     # ------------------------------------------------------------------ #
-    # Set up writer
+    # Set up writers
     # ------------------------------------------------------------------ #
     fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-    writer = cv2.VideoWriter(str(args.output), fourcc, fps, (width, height))
+    writer = cv2.VideoWriter(str(output_path), fourcc, fps, (width, height))
     if not writer.isOpened():
-        print(f"[ERROR] Cannot create output video: {args.output}", file=sys.stderr)
+        print(f"[ERROR] Cannot create output video: {output_path}", file=sys.stderr)
         sys.exit(1)
+
+    kp_file = open(session_dir / "keypoints.jsonl", "w", encoding="utf-8")
 
     if args.show:
         win_name = "Pose Estimation – Video  |  q/Esc=quit"
@@ -142,11 +143,27 @@ def main() -> None:
         vis = draw_poses(
             frame,
             detections,
-            draw_boxes=not args.no_boxes,
-            draw_skeleton=not args.no_skeleton,
         )
 
         writer.write(vis)
+
+        record = {
+            "frame_idx": frame_idx,
+            "timestamp_s": round(frame_idx / fps, 4),
+            "detections": [
+                {
+                    "bbox": [round(float(v), 2) for v in d["box"]],
+                    "score": round(float(d["score"]), 4),
+                    "keypoints": [
+                        [round(float(x), 2), round(float(y), 2), round(float(c), 3)]
+                        for x, y, c in d["keypoints"]
+                    ],
+                }
+                for d in detections
+            ],
+        }
+        kp_file.write(json.dumps(record) + "\n")
+
         frame_idx += 1
 
         # Progress
@@ -163,14 +180,21 @@ def main() -> None:
     # ------------------------------------------------------------------ #
     cap.release()
     writer.release()
+    kp_file.close()
+    meta = {
+        "fps": fps,
+        "total_frames": frame_idx,
+        "source": str(args.input),
+    }
+    (session_dir / "meta.json").write_text(json.dumps(meta, indent=2))
+    print(f"[INFO] Session saved → {session_dir}  ({frame_idx} frames)")
     if args.show:
         cv2.destroyAllWindows()
 
     elapsed = time.perf_counter() - t_start
     print(
         f"\n[INFO] Processed {frame_idx} frames in {elapsed:.1f}s "
-        f"({frame_idx / elapsed:.1f} fps). "
-        f"Output saved to: {args.output}"
+        f"({frame_idx / elapsed:.1f} fps)."
     )
 
 

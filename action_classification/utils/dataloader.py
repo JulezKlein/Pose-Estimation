@@ -359,6 +359,7 @@ def build_dataloaders(
         captures_dir=cfg.data.captures_dir,
         labels_file=cfg.data.labels_file,
         seq_len=cfg.training.seq_len,
+        overlap_threshold=cfg.training.overlap_threshold,
         normalise=True,
     )
 

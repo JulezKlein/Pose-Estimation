@@ -10,7 +10,8 @@ training:
   batch_size: 32
   learning_rate: 1.0e-3
   weight_decay: 1.0e-4
-  seq_len: 30             # number of frames per sample
+  seq_len: 15             # number of frames per sample
+  overlap_threshold: 0.4 # minimum fraction of frames with same label to assign that label to the sample
   val_split: 0.2          # fraction of data used for validation
   seed: 42
   device: mps             # cpu | cuda | mps

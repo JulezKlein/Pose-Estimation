@@ -207,3 +207,6 @@ marimo/_lsp/
 __marimo__/
 
 captures/
+captures_unlabeled/
+checkpoints/
+raw_data/
